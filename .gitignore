@@ -7,3 +7,5 @@ coverage/
 !.env.example
 *.log
 *.tgz
+
+.codex-marketplace-install.json

@@ -89,7 +89,7 @@ export function createMcpServer(manager: RunManager = new RunManager()): McpServ
     "doctor",
     {
       title: "Check local DeepSeek Harness prerequisites",
-      description: "Check Node, npx, runtime package, credentials visibility, data location, and workspace restrictions without downloading anything.",
+      description: "Check the selected local desktop or npm runtime, configured model, credential visibility, and workspace restrictions without downloading packages or contacting a model.",
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },

@@ -1,13 +1,13 @@
 {
   "name": "deepseek-harness",
-  "version": "0.3.1+codex.20260813212556",
+  "version": "0.3.1-desktop.1",
   "description": "Run DeepSeek Harness locally in a visible Web session controlled and reviewed by Codex.",
   "author": {
     "name": "DeepSeek Harness for Codex contributors"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "DeepSeek Harness for Codex",
+    "displayName": "DeepSeek Harness Desktop",
     "shortDescription": "Run and watch a local DeepSeek coding agent.",
     "longDescription": "Codex starts the local DeepSeek Harness Web UI, returns a clickable live-session link, delegates a scoped coding task, and independently reviews the workspace changes.",
     "developerName": "DeepSeek Harness for Codex contributors",

@@ -25,3 +25,16 @@ jobs:
         run: node --input-type=module -e 'import fs from "node:fs"; const file="package-lock.json"; fs.writeFileSync(file, fs.readFileSync(file,"utf8").replaceAll("https://registry.npmmirror.com/", "https://registry.npmjs.org/"));'
       - run: npm ci --registry=https://registry.npmjs.org --no-audit --no-fund
       - run: npm run check
+      - name: Upload the locally installable desktop plugin
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-harness-desktop
+          include-hidden-files: true
+          path: |
+            .agents/plugins/marketplace.json
+            plugins/deepseek-harness/
+            scripts/configure-local.mjs
+            README.md
+            README.en.md
+            LICENSE

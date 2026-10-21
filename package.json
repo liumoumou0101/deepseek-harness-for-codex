@@ -16,11 +16,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Seann0824/deepseek-harness-for-codex.git"
+    "url": "git+https://github.com/liumoumou0101/deepseek-harness-for-codex.git"
   },
-  "homepage": "https://github.com/Seann0824/deepseek-harness-for-codex#readme",
+  "homepage": "https://github.com/liumoumou0101/deepseek-harness-for-codex#readme",
   "bugs": {
-    "url": "https://github.com/Seann0824/deepseek-harness-for-codex/issues"
+    "url": "https://github.com/liumoumou0101/deepseek-harness-for-codex/issues"
   },
   "publishConfig": {
     "access": "public",
@@ -32,12 +32,13 @@
   },
   "packageManager": "npm@10.9.4",
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && node scripts/stage-plugin.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "check": "npm run typecheck && npm run test && npm run build",
+    "test": "vitest run && node --test tests/*.test.mjs",
+    "check": "npm run typecheck && npm run test && npm run build && npm run smoke:package",
     "release:check": "npm run check && npm pack --dry-run",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "npm run check",
+    "smoke:package": "node scripts/smoke-package.mjs"
   },
   "keywords": [
     "codex",

@@ -1,7 +1,7 @@
 {
-  "name": "deepseek-harness-for-codex",
+  "name": "deepseek-harness-desktop",
   "interface": {
-    "displayName": "DeepSeek Harness for Codex"
+    "displayName": "DeepSeek Harness Desktop"
   },
   "plugins": [
     {
