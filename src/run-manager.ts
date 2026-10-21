@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpath, mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createWebClient, createLegacyWebClient } from "./web-client.mjs";
 import {
   buildHarnessWebCommand,
   resolveAllowedRoots,
@@ -26,6 +27,11 @@ interface ServiceRecord {
   stoppedAt: Date | null;
   child: ChildProcess;
   log: string;
+  client?: Promise<HarnessWebClient> | undefined;
+  clientClose?: Promise<void>;
+  termination?: Promise<void>;
+  stopRequested?: boolean;
+  protocol?: "remote" | "legacy";
 }
 
 interface RunRecord {
@@ -46,14 +52,18 @@ interface RunRecord {
   error: string | null;
 }
 
-interface RpcEnvelope<T> {
-  result: { ok: true; value: T } | { ok: false; error: { code: string; message: string } };
+/** The authenticated Web connection owned by one Harness service. */
+export interface HarnessWebClient {
+  readonly protocol?: "remote" | "legacy";
+  rpc<T = unknown>(method: string, payload: unknown): Promise<T>;
+  close(): void | Promise<void>;
 }
 
 interface SessionSummary {
   sessionId: string;
   running: boolean;
   blank: boolean;
+  cwd?: string;
 }
 
 interface HistoryEvent {
@@ -69,6 +79,7 @@ export interface RunManagerOptions {
   commandFactory?: (input: { workspace: string; serviceHome: string }) => HarnessCommand;
   spawnProcess?: (command: HarnessCommand) => ChildProcess;
   openBrowser?: (url: string) => Promise<void>;
+  webClientFactory?: (webUrl: string) => Promise<HarnessWebClient>;
 }
 
 function defaultSpawnProcess(command: HarnessCommand): ChildProcess {
@@ -77,6 +88,7 @@ function defaultSpawnProcess(command: HarnessCommand): ChildProcess {
     env: command.env,
     detached: process.platform !== "win32",
     shell: false,
+    windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
@@ -139,6 +151,7 @@ export class RunManager {
   private readonly commandFactory: NonNullable<RunManagerOptions["commandFactory"]>;
   private readonly spawnProcess: NonNullable<RunManagerOptions["spawnProcess"]>;
   private readonly openBrowserImpl: NonNullable<RunManagerOptions["openBrowser"]>;
+  private readonly webClientFactory: NonNullable<RunManagerOptions["webClientFactory"]>;
 
   public constructor(options: RunManagerOptions = {}) {
     this.dataDirectory = resolve(options.dataDirectory ?? resolveDataDirectory());
@@ -148,6 +161,8 @@ export class RunManager {
     this.commandFactory = options.commandFactory ?? ((input) => buildHarnessWebCommand(input));
     this.spawnProcess = options.spawnProcess ?? defaultSpawnProcess;
     this.openBrowserImpl = options.openBrowser ?? defaultOpenBrowser;
+    this.webClientFactory = options.webClientFactory ?? ((webUrl) => new URL(webUrl).searchParams.has("token")
+      ? createWebClient(webUrl) : createLegacyWebClient(webUrl));
   }
 
   /** Starts or reuses the Harness Web service for an absolute workspace. */
@@ -193,11 +208,30 @@ export class RunManager {
   /** Stops one Web service and its active sessions. */
   public async stopService(serviceId: string): Promise<ServiceSnapshot> {
     const service = this.requireService(serviceId);
-    if (service.status === "running" || service.status === "starting") {
-      for (const run of this.runs.values()) {
-        if (run.serviceId === serviceId && run.status === "running") await this.cancel(run.runId);
+    try {
+      if (service.status === "running" || service.status === "starting") {
+        for (const run of this.runs.values()) {
+          if (run.serviceId !== serviceId || run.status !== "running") continue;
+          try {
+            await this.cancel(run.runId);
+          } catch (error) {
+            run.status = "failed";
+            run.error = `Could not cancel the Harness turn before stopping its service: ${errorText(error)}`;
+            run.finishedAt = new Date();
+            this.releaseSession(run);
+          }
+        }
       }
+    } finally {
+      // An unreachable RPC connection must never prevent stopping our own process.
       await this.terminate(service);
+      for (const run of this.runs.values()) {
+        if (run.serviceId !== serviceId || run.status !== "running") continue;
+        run.status = run.cancelRequested ? "cancelled" : "failed";
+        if (run.status === "failed") run.error ??= "Harness Web service was stopped before the task completed.";
+        run.finishedAt = new Date();
+        this.releaseSession(run);
+      }
     }
     return this.serviceSnapshot(service);
   }
@@ -227,6 +261,9 @@ export class RunManager {
       const summary = list.items.find((item) => item.sessionId === requestedSessionId);
       if (summary === undefined) throw new Error(`Unknown sessionId for this workspace: ${requestedSessionId}`);
       if (summary.running) throw new Error(`Harness session is still running: ${requestedSessionId}`);
+      if (summary.cwd !== undefined && await realpath(summary.cwd) !== service.workspace) {
+        throw new Error(`Harness session belongs to another workspace: ${requestedSessionId}`);
+      }
       sessionId = requestedSessionId;
       startEventSeq = history.events.reduce((highest, entry) => Math.max(highest, entry.event.seq), -1);
     }
@@ -236,6 +273,7 @@ export class RunManager {
     try {
       await this.rpc<{ accepted: true }>(service, "session.prompt", {
         sessionId,
+        requestId: randomUUID(),
         mode: "queue",
         content: [{ type: "text", text: task }],
       });
@@ -307,7 +345,7 @@ export class RunManager {
   /** Stops all Web services before the MCP server exits. */
   public async close(): Promise<void> {
     await Promise.all([...this.services.values()].map(async (service) => {
-      if (service.status === "running" || service.status === "starting") await this.terminate(service);
+      await this.terminate(service);
     }));
   }
 
@@ -356,6 +394,7 @@ export class RunManager {
       child.once("close", (code, signal) => {
         clearTimeout(timer);
         service.stoppedAt = new Date();
+        void this.closeClient(service);
         if (service.status === "starting") {
           service.status = "failed";
           reject(new Error(`Harness Web service exited before readiness (code ${String(code)}, signal ${String(signal)}). ${service.log}`));
@@ -388,14 +427,19 @@ export class RunManager {
     try {
       const [list, history] = await Promise.all([
         this.rpc<{ items: SessionSummary[] }>(service, "session.list", {}),
-        this.rpc<{ events: HistoryEvent[] }>(service, "session.history", { sessionId: run.sessionId, maxMessages: 50 }),
+        this.rpc<{ events: HistoryEvent[] }>(service, "session.history", {
+          sessionId: run.sessionId,
+          maxMessages: 50,
+          afterSeq: run.startEventSeq,
+        }),
       ]);
       const summary = list.items.find((item) => item.sessionId === run.sessionId);
+      run.error = null;
       const events = history.events.filter((entry) => entry.event.seq > run.startEventSeq);
       run.lastEventSeq = events.reduce((highest, entry) => Math.max(highest, entry.event.seq), run.lastEventSeq);
       run.assistantText = assistantText(events);
       const agentError = [...events].reverse().find((entry) => entry.event.type === "agent/error");
-      const turnEnded = events.some((entry) => entry.event.type === "turn/end");
+      const turnEnded = [...events].reverse().find((entry) => entry.event.type === "turn/end");
       if (agentError !== undefined) {
         run.status = "failed";
         run.error = recordText(agentError.event.data) ?? "DeepSeek Harness reported an agent error.";
@@ -403,8 +447,27 @@ export class RunManager {
       } else if (run.cancelRequested && (summary === undefined || !summary.running)) {
         run.status = "cancelled";
         run.finishedAt = new Date();
-      } else if (turnEnded && (summary === undefined || !summary.running)) {
-        run.status = "succeeded";
+      } else if (turnEnded !== undefined && (summary === undefined || !summary.running)) {
+        const data = typeof turnEnded.event.data === "object" && turnEnded.event.data !== null
+          ? turnEnded.event.data as Record<string, unknown> : {};
+        const reason = typeof data.reason === "object" && data.reason !== null
+          ? data.reason as Record<string, unknown> : {};
+        let kind = reason.kind;
+        if (kind === undefined && service.protocol === "legacy") {
+          // rc.6 emitted stop/cancelled strings; only its connection may omit a reason.
+          if (data.reason === undefined || data.reason === null || data.reason === "stop") kind = "completed";
+          else if (data.reason === "cancelled" || data.reason === "aborted") kind = "aborted";
+          else if (typeof data.reason === "string") kind = data.reason;
+        }
+        if (kind === "completed") {
+          run.status = "succeeded";
+        } else if (kind === "aborted") {
+          run.status = "cancelled";
+        } else {
+          run.status = "failed";
+          const details = recordText(reason.error) ?? recordText(reason);
+          run.error = details ?? `DeepSeek Harness ended the turn: ${String(kind ?? "unknown reason")}.`;
+        }
         run.finishedAt = new Date();
       }
       if (run.status !== "running") this.releaseSession(run);
@@ -416,16 +479,38 @@ export class RunManager {
 
   private async rpc<T>(service: ServiceRecord, method: string, payload: unknown): Promise<T> {
     if (service.webUrl === null) throw new Error("Harness Web service has no URL.");
-    const response = await fetch(`${service.webUrl}/api/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ type: "client-request", rpcId: `mcp-${randomUUID()}`, method, payload }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) throw new Error(`${method} failed over HTTP ${String(response.status)}: ${await response.text()}`);
-    const body = await response.json() as RpcEnvelope<T>;
-    if (!body.result.ok) throw new Error(`${method} failed: ${body.result.error.code}: ${body.result.error.message}`);
-    return body.result.value;
+    if (service.stopRequested || service.status !== "running") throw new Error("Harness Web service is stopping or unavailable.");
+    if (service.client === undefined) {
+      // Cache the promise too: simultaneous list/history requests share one authenticated peer.
+      service.client = this.webClientFactory(service.webUrl);
+    }
+    let client: HarnessWebClient;
+    try {
+      client = await service.client;
+    } catch (error) {
+      service.client = undefined;
+      throw error;
+    }
+    if (service.stopRequested || service.status !== "running") {
+      await this.closeClient(service);
+      throw new Error("Harness Web service stopped while connecting.");
+    }
+    service.protocol = client.protocol ?? "remote";
+    return client.rpc<T>(method, payload);
+  }
+
+  private async closeClient(service: ServiceRecord): Promise<void> {
+    if (service.clientClose === undefined) {
+      service.clientClose = (async () => {
+        try {
+          const client = await service.client;
+          await client?.close();
+        } catch {
+          // A failed connection or cleanup must not prevent the child process from stopping.
+        }
+      })();
+    }
+    await service.clientClose;
   }
 
   private async resolveWorkspace(input: string): Promise<string> {
@@ -442,7 +527,7 @@ export class RunManager {
   private serviceForWorkspace(workspace: string): ServiceRecord | undefined {
     const id = this.serviceByWorkspace.get(workspace);
     const service = id === undefined ? undefined : this.services.get(id);
-    return service?.status === "running" ? service : undefined;
+    return service?.status === "running" && !service.stopRequested ? service : undefined;
   }
 
   private requireService(serviceId: string): ServiceRecord {
@@ -462,18 +547,29 @@ export class RunManager {
   }
 
   private async terminate(service: ServiceRecord): Promise<void> {
-    if (service.child.exitCode !== null) return;
-    const closed = new Promise<void>((resolveClose) => service.child.once("close", () => resolveClose()));
-    if (process.platform !== "win32" && service.child.pid !== undefined) {
-      try { process.kill(-service.child.pid, "SIGTERM"); } catch { service.child.kill("SIGTERM"); }
-    } else {
-      service.child.kill("SIGTERM");
-    }
-    await Promise.race([closed, new Promise<void>((resolveWait) => setTimeout(resolveWait, CANCEL_GRACE_MS))]);
-    if (service.child.exitCode === null) service.child.kill("SIGKILL");
-    service.status = "stopped";
-    service.stoppedAt = new Date();
-    this.serviceByWorkspace.delete(service.workspace);
+    if (service.termination !== undefined) return service.termination;
+    service.stopRequested = true;
+    if (this.serviceByWorkspace.get(service.workspace) === service.serviceId) this.serviceByWorkspace.delete(service.workspace);
+    service.termination = (async () => {
+      await this.closeClient(service);
+      if (service.child.exitCode !== null) return;
+      const closed = new Promise<void>((resolveClose) => service.child.once("close", () => resolveClose()));
+      if (process.platform !== "win32" && service.child.pid !== undefined) {
+        try { process.kill(-service.child.pid, "SIGTERM"); } catch { service.child.kill("SIGTERM"); }
+      } else {
+        service.child.kill("SIGTERM");
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([closed, new Promise<void>((resolveWait) => { timer = setTimeout(resolveWait, CANCEL_GRACE_MS); })]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      if (service.child.exitCode === null) service.child.kill("SIGKILL");
+      service.status = "stopped";
+      service.stoppedAt = new Date();
+    })();
+    return service.termination;
   }
 
   private serviceSnapshot(service: ServiceRecord): ServiceSnapshot {

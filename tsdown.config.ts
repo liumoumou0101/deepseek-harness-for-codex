@@ -1,5 +1,4 @@
 import { defineConfig } from "tsdown";
-
 export default defineConfig({
   entry: ["src/bin.ts"],
   clean: true,
@@ -9,4 +8,6 @@ export default defineConfig({
   outDir: "dist",
   platform: "node",
   target: "node22",
+  shims: true,
+  deps: { alwaysBundle: [/.*/], onlyBundle: false, onlyImport: [] },
 });
