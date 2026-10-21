@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Use the official registry for reproducible installs
+        shell: bash
+        run: node --input-type=module -e 'import fs from "node:fs"; const file="package-lock.json"; fs.writeFileSync(file, fs.readFileSync(file,"utf8").replaceAll("https://registry.npmmirror.com/", "https://registry.npmjs.org/"));'
+      - run: npm ci --registry=https://registry.npmjs.org --no-audit --no-fund
+      - run: npm run check
