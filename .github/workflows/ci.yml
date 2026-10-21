@@ -35,6 +35,7 @@ jobs:
             .agents/plugins/marketplace.json
             plugins/deepseek-harness/
             scripts/configure-local.mjs
+            scripts/test-local.mjs
             README.md
             README.en.md
             LICENSE

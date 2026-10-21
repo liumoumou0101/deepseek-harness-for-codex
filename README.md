@@ -1,179 +1,111 @@
-# DeepSeek Harness for Codex
+# DeepSeek Harness Desktop for Codex
 
-<p align="center">
-  <strong>简体中文</strong> · <a href="./README.en.md">English</a>
-</p>
+[English](./README.en.md)
 
-<p align="center">
-  <img src="./assets/icon.png" width="128" alt="DeepSeek Harness for Codex 图标">
-</p>
+这个 fork 让 Codex 通过专属 MCP 插件调用已安装的 DeepSeek Harness 桌面版，在可见的 Web 会话中委派任务，然后独立检查工作区变更。原有 npm runtime 仍然保留。
 
-DeepSeek Harness for Codex 让 Codex 在本地启动 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeek-Harness)，返回可点击的实时 Web 会话链接，将任务委派给它执行，并由 Codex 独立检查真实的工作区变更。
+当前兼容目标是桌面版 `0.2.1-rc.2`，需要 Node.js 22 或更新版本及支持插件的 Codex。桌面版须已配置选中的模型、明确的 `llm-pi-ai` provider、`baseURL` 和 `apiKeyEnv`。仅有 OAuth 登录或动态 JavaScript 模型配置不属于此适配器的支持范围。自动化测试覆盖启动、协议和凭据隔离；安装后仍须单独验证实际模型连接。
 
-![DeepSeek Harness for Codex 演示](./imgs/examples.gif)
+## 安装
 
-## 快速开始
+从本地源码目录安装时，先安装依赖并构建被 git 忽略的 `dist/`：
 
-除非你只需要独立的 MCP 服务，否则推荐安装 Codex 插件。插件会同时安装 MCP 工具和委派工作流，让 Codex 在 Harness 完成任务后独立验收结果。
-
-### 1. 准备环境
-
-- Node.js 22 或更高版本，并包含 `npx`
-- 支持插件的 Codex 客户端
-- DeepSeek API Key
-
-推荐把 API Key 放在目标仓库根目录中不提交到 Git 的 `.env` 文件里：
-
-```dotenv
-DEEPSEEK_API_KEY=your-key
-```
-
-不要提交这个文件。你也可以把 `DEEPSEEK_API_KEY` 注入启动 Codex 的环境，或者稍后在 Harness 页面中的 **Settings → Models** 配置。
-
-### 2. 安装插件
-
-在终端中执行以下两条命令：
-
-```sh
-codex plugin marketplace add Seann0824/deepseek-harness-for-codex --ref main
-codex plugin add deepseek-harness@deepseek-harness-for-codex
-```
-
-在 macOS 上，如果找不到 `codex`，或者其他全局安装覆盖了桌面客户端的命令，请直接使用客户端内置的可执行文件：
-
-```sh
-CODEX_APP_BIN="/Applications/ChatGPT.app/Contents/Resources/codex"
-"$CODEX_APP_BIN" plugin marketplace add Seann0824/deepseek-harness-for-codex --ref main
-"$CODEX_APP_BIN" plugin add deepseek-harness@deepseek-harness-for-codex
-```
-
-### 3. 新建 Codex 任务
-
-插件会在新任务启动时加载。安装完成后新建一个 Codex 任务，并要求它使用 DeepSeek Harness，例如：
-
-> 使用 DeepSeek Harness 在可见的本地会话中实现这个需求。不要自动打开浏览器，把 Harness 实时页面链接发给我；完成后由你检查 diff 并运行相关测试。
-
-Codex 会在本地启动 Harness，在空闲的回环端口提供 Web 页面，返回可点击链接，提交任务并跟踪同一个可见会话，最后独立验收结果。浏览器不会自动打开；需要查看过程时，由你点击 Codex 消息中的链接。你不需要手动启动 Harness，也不需要另外注册 MCP 服务。
-
-首次运行可能会下载固定版本的 MCP 和 Harness npm 包，后续运行会使用本地 npm 缓存。
-
-## 从旧名称迁移
-
-项目已从 `deepseek-harness-mcp` 更名为 `deepseek-harness-for-codex`。如果安装过旧版插件，请先移除旧插件和旧市场，再按照上面的“安装插件”重新安装：
-
-```sh
-codex plugin remove deepseek-harness-mcp@deepseek-harness
-codex plugin marketplace remove deepseek-harness
-```
-
-旧版 npm 包不会自动替换为新包。默认数据目录仍保留为 `~/.deep-seek-harness-mcp`，因此重新安装后可以继续使用原有的本地 Harness 设置和会话。
-
-## 更新
-
-刷新插件市场并重新安装插件，然后新建一个 Codex 任务：
-
-```sh
-codex plugin marketplace upgrade deepseek-harness-for-codex
-codex plugin add deepseek-harness@deepseek-harness-for-codex
-```
-
-## 卸载
-
-```sh
-codex plugin remove deepseek-harness@deepseek-harness-for-codex
-codex plugin marketplace remove deepseek-harness-for-codex
-```
-
-## 独立安装 MCP
-
-仅当你只需要 MCP 工具、不需要插件的委派工作流和 Codex UI 入口时使用：
-
-```sh
-codex mcp add deepseek-harness -- npx --yes --package=deepseek-harness-for-codex@0.3.1 -- deepseek-harness-for-codex
-```
-
-注册完成后新建一个 Codex 任务。
-
-## 工作原理
-
-插件通过 `npx` 启动已发布的 MCP 服务。某个工作区首次运行任务时，MCP 服务会在本地回环地址执行 `@deepseek-ai/dsh web --port 0`，但不会自动打开浏览器。Codex 通过 Harness Web API 创建工作区和会话，并把对应 URL 作为可点击链接发给用户，因此用户按需打开后看到的就是 Codex 正在控制的实时任务。后续任务会复用该本地服务，不会通过托管中转服务执行。
-
-每次运行都是异步任务：
-
-1. Codex 使用绝对工作区路径和完整任务调用 `start_run`。
-2. MCP 服务启动或复用 Harness Web，提交可见会话，并向 Codex 返回页面链接。
-3. Codex 展示可点击链接；用户需要时手动打开，同时 Codex 通过 `wait_run` 或 `get_run` 跟踪同一会话。
-4. Codex 检查实际 diff，并运行自己的验证流程。
-
-## MCP 工具
-
-| 工具 | 用途 |
-| --- | --- |
-| `doctor` | 检查 Node、npx、包版本、凭据可见性、数据目录和工作区限制。 |
-| `start_service` | 为工作区启动或复用 Harness Web，并返回页面链接；默认不打开浏览器。 |
-| `open_service` | 在用户明确要求时打开正在运行的 Harness 页面。 |
-| `list_services` | 列出本地 Harness Web 服务及其 URL。 |
-| `stop_service` | 停止 Harness Web 服务。 |
-| `start_run` | 由 Codex 选择创建新会话或继续已完成的会话，然后提交任务。 |
-| `wait_run` | 等待可见会话，单次最多 30 秒。 |
-| `get_run` | 读取 Web 会话状态和助手输出。 |
-| `list_runs` | 列出当前 MCP 服务进程创建的运行记录。 |
-| `cancel_run` | 取消当前 agent turn，同时保留 Web 服务。 |
-
-`start_service` 和 `start_run` 的 `openBrowser` 默认值都是 `false`，插件也会明确传入 `false`。Codex 应把返回的 `webUrl` 渲染成可点击链接；只有用户明确要求 Codex 代为打开时，才使用 `open_service`。
-
-## 配置
-
-| 环境变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `DSH_MCP_DATA_DIR` | `~/.deep-seek-harness-mcp` | 持久化各工作区的 Harness Web 设置和会话。 |
-| `DSH_MCP_WORKSPACE_ROOTS` | 不限制 | `start_run` 允许使用的绝对根目录列表，使用当前平台的路径分隔符。 |
-| `DSH_MCP_HARNESS_PACKAGE` | `@deepseek-ai/dsh@0.1.0-rc.6` | 启动本地 Harness 进程时使用的精确 npm 包版本。 |
-| `DSH_MCP_NPX_COMMAND` | `npx` | 自定义 `npx` 命令路径。 |
-| `DSH_PERMISSION_MODE` | `workspace-write` | DeepSeek Harness 权限模式。 |
-| `DEEPSEEK_BASE_URL` | 服务商默认值 | 可选的 DeepSeek 兼容 API 地址。 |
-
-Harness 子进程默认关闭遥测。Web 服务只绑定回环地址并自动选择空闲端口。会话数据保留在配置的数据目录中，便于本地审计。
-
-## 安全模型
-
-`start_run` 是可写工具。服务端要求工作区必须是已存在的绝对路径，会解析符号链接，使用 argv 而不是 shell 启动进程，并可通过 `DSH_MCP_WORKSPACE_ROOTS` 限制允许访问的根目录。Harness Web 仅监听回环地址。默认权限模式是 `workspace-write`，本项目不会静默启用不受限制的主机访问权限。
-
-## 会话模型
-
-每次调用 `start_run` 时，Codex 都可以选择会话。省略 `sessionId` 会创建新的可见 Harness 会话；传入之前已完成运行返回的 `sessionId`，会继续原有对话，并且只返回本轮新增输出。运行中的会话不能被并发复用。本地 Web 服务会持续复用，直到调用 `stop_service` 或 MCP 服务退出。
-
-## 本地开发
-
-克隆仓库、构建 npm 包，然后把当前仓库作为本地插件市场添加到 Codex：
-
-```sh
-npm install
+```powershell
+npm ci
 npm run check
-codex plugin marketplace add /absolute/path/to/deepseek-harness-for-codex
-codex plugin add deepseek-harness@deepseek-harness-for-codex
+node .\scripts\configure-local.mjs --dsh-executable 'D:\Apps\DSH\DeepSeek Harness.exe'
+codex plugin marketplace add (Get-Location).Path
+codex plugin add deepseek-harness@deepseek-harness-desktop
 ```
 
-正常安装的插件会启动已发布的 `deepseek-harness-for-codex@0.3.1`。开发本地 MCP 时，可以临时把插件 `.mcp.json` 指向 `dist/bin.mjs` 的绝对路径。
+也可以从本仓库一次成功的 GitHub Actions 运行中下载自包含插件 artifact，将完整内容解压到固定的本地目录，进入该目录后执行上面的 `configure-local.mjs` 及两条 `codex plugin` 命令。自包含 artifact 已包含运行文件，无需再次执行 `npm ci`。直接添加 GitHub 远端 marketplace 不会自动构建 `dist/`。
 
-## 发布 npm 包
+安装完成后新建 Codex task。此 fork 的 marketplace 名称是 `deepseek-harness-desktop`，插件 ID 是 `deepseek-harness@deepseek-harness-desktop`，MCP namespace 是 `deepseek-harness-desktop`。如果同时安装了上游插件，可停用旧插件，避免调用错工具。
 
-本仓库将无 scope 的公共包 `deepseek-harness-for-codex` 发布到 npm 官方 registry。`npm publish` 会自动执行类型检查、测试和构建。发布包包含 `dist/`、中英文 README、演示 GIF、`LICENSE` 和包清单。
+## 本地桌面版配置
 
-登录并确认 npm 账号：
+`configure-local.mjs` 默认写入 `~/.deep-seek-harness-mcp/local-runtime.json`，仅保存以下四个路径，不保存 API key：
 
-```sh
-npm login --registry=https://registry.npmjs.org/
-npm whoami --registry=https://registry.npmjs.org/
+| 字段 | 用途 |
+| --- | --- |
+| `dshExecutable` | 桌面版可执行文件的绝对路径 |
+| `dshCli` | 桌面版自带 CLI 的绝对路径 |
+| `dshHome` | 原桌面版配置目录，默认 `~/.dsh` |
+| `desktopProfile` | 原桌面版 profile 文件 |
+
+可用 `--dsh-home` 指定原配置目录，用 `--settings` 指定适配器设置文件。使用自定义设置文件时，还须将其路径通过 `DSH_MCP_LOCAL_SETTINGS` 传给 MCP server。桌面版更新或移动后，应重新运行配置命令。
+
+存在本地设置文件时自动使用 local runtime。`DSH_MCP_RUNTIME=local` 可以明确选择桌面版；`DSH_MCP_RUNTIME=npm` 可以回到原有 npm runtime。此设置不要求修改系统默认 PowerShell。
+
+适配器只读取当前选中 provider/model 的必要配置。原 credential store 保持只读：只解析选中的 credential reference，将对应值通过私有进程管道读入内存，再传给 DSH 子进程环境。store 中该 reference 的值优先于同名启动环境变量；不会复制整个凭据文件，也不会把 key 写入设置文件、模型覆盖文件或 doctor 输出。
+
+Web 服务使用独立目录存放会话、浏览器登录状态及自己的 credential store，不把原桌面版 store 作为可写存储。请勿打印适配器内部 helper 的原始输出或序列化子进程环境，它们包含私有凭据传递数据。
+
+## 验证与使用
+
+完成构建及本地配置后，在普通用户终端的插件目录中运行：
+
+```powershell
+node .\scripts\test-local.mjs
 ```
 
-检查发布内容、发布并验证可执行文件：
+该脚本通过新 MCP bundle 启动 DSH Web，在独立临时空工作区请求严格回复 `DSH_CONNECTION_OK`，不接触项目文件。它需要实际模型网络访问；沙箱网络限制及 CI 的模拟测试都不能证明真实服务已返回 HTTP 200。
 
-```sh
-npm run release:check
-npm publish
-npm view deepseek-harness-for-codex version --registry=https://registry.npmjs.org/
-npx --yes --package=deepseek-harness-for-codex@0.3.1 -- deepseek-harness-for-codex
+在新 Codex task 中可以这样请求：
+
+> 使用 deepseek-harness-desktop 的 doctor 检查本地配置，然后在空临时工作区发起一次最小模型请求，只回复 DSH_CONNECTION_OK，不使用工具或读写项目文件。不要自动打开浏览器，提供 Web 会话链接和实际执行结果。
+
+doctor 只检查运行时、路径、模型和本地凭据元数据，不发送模型请求。`credentialAvailable: true` 表示找到该 reference 对应的非空本地值，不代表服务器已接受凭据、套餐有权限或网络可用。直接运行 DSH CLI 成功也不能替代通过本插件的验证。
+
+日常任务示例：
+
+> 使用 DeepSeek Harness Desktop 在当前仓库修复这个问题，给我可见会话链接。结束后由 Codex 检查 diff 并执行相关检查。
+
+插件的标准流程是先 doctor，确定明确的任务和工作区，再启动或续接可见会话，等待结果，最后由 Codex 独立审查。新任务默认新建会话；只有同一工作区已完成的会话适合续接。失败、取消、超时或达到限制都不等于任务完成。
+
+| MCP 工具 | 用途 |
+| --- | --- |
+| `doctor` | 检查本地配置和运行前提 |
+| `start_service` | 启动或复用本地 Web 服务 |
+| `open_service` | 按用户明确要求打开 Web 页面 |
+| `list_services` | 列出托管 Web 服务 |
+| `stop_service` | 停止托管 Web 服务 |
+| `start_run` | 在可见会话中委派一次任务 |
+| `get_run` | 读取运行状态 |
+| `wait_run` | 等待状态变化 |
+| `cancel_run` | 取消运行 |
+| `list_runs` | 列出托管运行 |
+
+## 环境设置
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `DSH_MCP_RUNTIME` | `local` 或 `npm`；未设置时按本地配置是否存在选择 |
+| `DSH_MCP_LOCAL_SETTINGS` | 本地 runtime 设置文件路径 |
+| `DSH_MCP_DATA_DIR` | 独立 Web 服务数据目录；默认使用插件数据目录或 `~/.deep-seek-harness-mcp` |
+| `DSH_MCP_WORKSPACE_ROOTS` | 限制允许访问的工作区根目录 |
+| `DSH_PERMISSION_MODE` | DSH 权限模式，默认 `workspace-write` |
+| `DSH_MCP_HARNESS_PACKAGE` | npm runtime 的包覆盖选项 |
+| `DSH_MCP_NPX_COMMAND` | npm runtime 的 npx 可执行文件覆盖选项 |
+
+local runtime 直接启动桌面版自带 CLI，只监听 `127.0.0.1` 并传入 `--no-open`。Windows npm runtime 使用 Node 执行 `npx-cli.js`，避免通过 shell 启动 `.cmd` 的兼容问题。
+
+工作区必须是存在的绝对路径，并经过真实路径及允许根目录检查。默认不自动打开浏览器，不自动提高权限；带认证信息的 Web 会话链接应当私密保存。Codex 对结果的独立验证仍然必要，提交、推送、发布或部署需要用户明确要求。
+
+## 更新与卸载
+
+更新源码后重新执行 `npm ci` 和 `npm run check`，或用新 Actions artifact 完整替换本地插件目录，然后更新 marketplace 并在新 task 中使用：
+
+```powershell
+codex plugin marketplace upgrade deepseek-harness-desktop
+codex plugin add deepseek-harness@deepseek-harness-desktop
 ```
 
-npm 版本不能被覆盖。后续发布前，需要同步更新 `package.json`、`.mcp.json` 和 MCP 服务元数据中的版本引用，然后执行 `npm version patch`、`npm version minor` 或 `npm version major`。
+卸载插件：
+
+```powershell
+codex plugin remove deepseek-harness@deepseek-harness-desktop
+codex plugin marketplace remove deepseek-harness-desktop
+```
+
+许可证：MIT。此 fork 不需要发布上游 npm 包即可使用本地桌面版。
